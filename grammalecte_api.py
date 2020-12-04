@@ -15,7 +15,7 @@ def generateParagraphFromBuffer (buff, bConcatLines=False):
 			yield iParagraph, sLine, None
 	pass
 
-def main (buffer):
+def main (buffer, state):
 
 	oGrammarChecker = grammalecte.GrammarChecker("Grammalecte.grammalecte.fr")
 	oSpellChecker = oGrammarChecker.getSpellChecker()
@@ -31,7 +31,9 @@ def main (buffer):
 	sOutput +='{ "grammalecte": "'+oGrammarChecker.gce.version+'", "lang": "'+oGrammarChecker.gce.lang+'", "data" : [\n'
 
 	for i, sText, lLineSet in generateParagraphFromBuffer(buffer):
-
+		if not state['showing_gramma']:
+			break
+		print("Grammalect : checking line ",i)
 		sText = oGrammarChecker.generateParagraphAsJSON(i, sText, bContext=True, bEmptyIfNoErrors=True, \
 																bSpellSugg=True, bReturnText=False, lLineSet=lLineSet)
 		if sText:
@@ -39,7 +41,7 @@ def main (buffer):
 				sOutput += ",\n"
 			sOutput += sText
 			bComma = True
-			
+
 	sOutput += "\n]}\n"
 	return sOutput
 

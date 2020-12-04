@@ -19,6 +19,7 @@ def get_state(view):
 		view_states[view.id()] = {
 			'errors' : [],
 			'showing_gramma' : False,
+			'is_running' : False,
 			'show_apos' : False,
 			'show_spaces' : False,
 			'regions' : [],
@@ -27,7 +28,7 @@ def get_state(view):
 		}
 	return view_states[view.id()]
 
-# get the error underneath a set of 'dip' coordinates 
+# get the error underneath a set of 'dip' coordinates
 def event_to_error(event, view):
 	pt = view.window_to_text((event["x"], event["y"]))
 	return point_to_error(pt, view)
@@ -42,7 +43,7 @@ def point_to_error(point, view):
 	for reg_index, reg in enumerate(regions):
 		if reg.contains(point):
 				# get the corresponding error
-				# TODO : not rely on lists orders to find error 
+				# TODO : not rely on lists orders to find error
 				return get_state(view)['errors'][reg_index]
 
 	# if none found, return None
@@ -55,7 +56,10 @@ class GrammaRunCommand(sublime_plugin.TextCommand):
 
 	def run(self, edit):
 		# run Grammalecte analysis in a new thread to avoid to block the view
-		sublime.set_timeout_async(lambda : runGrammalecte(self.view), 0)
+		if not get_state(self.view)['is_running']:
+			get_state(self.view)['is_running'] = True
+			get_state(self.view)['showing_gramma'] = True
+			sublime.set_timeout_async(lambda : runGrammalecte(self.view), 0)
 
 	def description(self):
 		if get_state(self.view)['showing_gramma']:
@@ -65,16 +69,13 @@ class GrammaRunCommand(sublime_plugin.TextCommand):
 		pass
 
 def applyGrammalecte(settings, view, state, regions, errors, show_apos, show_spaces):
-	if time.time() > state['next_auto_run']:
+	if time.time() > state['next_auto_run'] and state['showing_gramma']:
 
 		state['regions'] = regions
 		state['errors'] = errors
 		state['show_apos'] = show_apos
 		state['show_spaces'] = show_spaces
 		view.add_regions("gramma", state['regions'], "entity", "dot", sublime.DRAW_NO_FILL | sublime.DRAW_SQUIGGLY_UNDERLINE)
-
-		# flag to show that we up and running
-		state['showing_gramma'] = True
 
 		# get autorun interval from config file
 		autorun_interval_seconds = settings.get("autorun_interval_seconds")
@@ -85,7 +86,7 @@ def applyGrammalecte(settings, view, state, regions, errors, show_apos, show_spa
 		# print that we are ready in the status bar
 		view.window().status_message("Grammalecte : "+str(len(state['errors']))+" grammar error"+ ("s" if len(state['errors']) > 1 else "")+" found.")
 		view.settings().set("gramma", True)
-	
+
 		for rule in settings.get("autocorrect_ruleid", []):
 			#correct_all_ruleid(view, edit, rule)
 			view.run_command("gramma_fix_all_current", {"rule":rule})
@@ -99,19 +100,21 @@ def applyGrammalecte(settings, view, state, regions, errors, show_apos, show_spa
 # save the current buffer to grammalecte-cli.py (must be in path), reflect results in view
 def runGrammalecte(view):
 	global grammalecte_path
-	
+
 	# get full buffer content and save it to a temp file (this is system independant)
 	contents = view.substr(sublime.Region(0, view.size()))
-	
+
 	# send temp file to cli (must be in path, not system indepentant, currently only tested on Linux system)
 	# get and parse JSON result
-	result = api.main(contents)
+	print("Grammalect : start verifying")
+	result = api.main(contents, get_state(view))
 	gramma = json.loads(result)
+	print("Grammalect : end verifying")
 
 	# get plugin state for this view
 	state = get_state(view)
 
-	# check that Grammalecte landed results 
+	# check that Grammalecte landed results
 	if "data" in gramma:
 		data = gramma['data']
 
@@ -123,7 +126,7 @@ def runGrammalecte(view):
 
 		# get ingored rules from settings
 		s = sublime.load_settings('Grammalecte.sublime-settings')
-		ignore_ruleid = [x.lower() for x in s.get('ignored_ruleid', []) or []]	
+		ignore_ruleid = [x.lower() for x in s.get('ignored_ruleid', []) or []]
 
 		# go through result, paragraph by pragraph
 		region_index = 0
@@ -168,12 +171,13 @@ def runGrammalecte(view):
 				pass
 			pass
 
-		
+
 		# draw error/regions on view and update state
 		# (run this in another thread to be sure to have the last data and cancel correction if buffer modified
 		# during the execution of the cli tool)
 		sublime.set_timeout_async(lambda : applyGrammalecte(s, view, state, regions, errors, show_apos, show_spaces),0)
-		
+
+	get_state(view)['is_running'] = False
 	pass
 
 # do a replacement of erroned text by suggested text
@@ -258,7 +262,7 @@ class GrammaAposCommand(sublime_plugin.TextCommand):
 
 	def run(self, edit):
 
-		correct_all_ruleid(self.view, edit, "apostrophe_typographique")	
+		correct_all_ruleid(self.view, edit, "apostrophe_typographique")
 
 		# set flag off
 		get_state(self.view)['show_apos'] = False
@@ -303,11 +307,11 @@ class GrammaFixAllCurrentCommand(sublime_plugin.TextCommand):
 
 		# if any :
 		if rule is not None:
-			correct_all_ruleid(self.view, edit, rule)	
-			
+			correct_all_ruleid(self.view, edit, rule)
+
 
 	# only show if there is an error under the mouse
-	# and there is at least on suggestion 
+	# and there is at least on suggestion
 	def is_visible(self, event):
 		error = event_to_error(event, self.view)
 		if error is None: return False
@@ -356,7 +360,7 @@ class GrammaSuggestCommand(sublime_plugin.TextCommand):
 	def want_event(self):
 		return True
 
-# 
+#
 def autorun(view):
 	# get autorun interval from config file
 	s = sublime.load_settings('Grammalecte.sublime-settings')
@@ -410,7 +414,7 @@ class GrammaEventsCommand(sublime_plugin.ViewEventListener):
 
 			# update next due autorun to now + interval
 			get_state(self.view)['next_auto_run'] = time.time() + autorun_interval_seconds
-			
+
 			# queue autorun
 			sublime.set_timeout_async(lambda : autorun(self.view), autorun_interval_seconds*1000+100)
 		pass
